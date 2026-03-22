@@ -294,3 +294,218 @@ def search(query, project):
             f"  [dim]{cp.timestamp.strftime('%m-%d %H:%M')}[/] "
             f"[cyan]{cp.id[:8]}[/] {cp.current_task[:60]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# resume  (the key command — run at the start of a new session)
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--project", "-p", default=None)
+@click.option("--checkpoint-id", "-c", default=None)
+def resume(project, checkpoint_id):
+    """Print a concise briefing to resume work in a new session.
+
+    This is the command to run at the start of every session.
+    It shows exactly where you left off and what to do first.
+    """
+    store = _store()
+    proj = project or _current_project()
+
+    if checkpoint_id:
+        cp = store.get_checkpoint(checkpoint_id)
+        if not cp:
+            console.print(f"[red]Checkpoint not found: {checkpoint_id}[/]")
+            sys.exit(1)
+    else:
+        cp = store.latest_checkpoint(proj)
+        if not cp:
+            console.print(f"[yellow]No checkpoints for '{proj}'. Start with: threadline checkpoint ...[/]")
+            return
+
+    status_color = {
+        "in-progress": "yellow",
+        "blocked": "red",
+        "complete": "green",
+        "abandoned": "dim",
+    }.get(cp.status, "white")
+
+    lines = []
+    lines.append(f"[bold]Goal[/]   {cp.goal}")
+    lines.append(f"[bold]Status[/] [{status_color}]{cp.status}[/]  •  {cp.timestamp.strftime('%Y-%m-%d %H:%M')} UTC")
+    if cp.agent:
+        lines.append(f"[bold]Agent[/]  {cp.agent}")
+    lines.append("")
+
+    if cp.next_steps:
+        lines.append(f"[bold green]START HERE →[/] {cp.next_steps[0]}")
+        if len(cp.next_steps) > 1:
+            lines.append("")
+            lines.append("[dim]Then:[/]")
+            for step in cp.next_steps[1:]:
+                lines.append(f"  • {step}")
+    else:
+        lines.append(f"[bold green]START HERE →[/] Resume: {cp.current_task}")
+
+    if cp.dead_ends:
+        lines.append("")
+        lines.append("[bold red]DO NOT repeat:[/]")
+        for de in cp.dead_ends:
+            lines.append(f"  • {de}")
+
+    if cp.decisions:
+        lines.append("")
+        lines.append("[dim]Key decisions already made:[/]")
+        for d in cp.decisions:
+            lines.append(f"  • {d.what} — {d.why}")
+
+    if cp.open_questions:
+        lines.append("")
+        lines.append("[dim]Open questions:[/]")
+        for q in cp.open_questions:
+            lines.append(f"  ? {q}")
+
+    if cp.git_ref:
+        lines.append("")
+        lines.append(f"[dim]git ref:[/] {cp.git_ref}")
+
+    console.print(Panel(
+        "\n".join(lines),
+        title=f"[bold]RESUME: {proj}[/]",
+        border_style=status_color,
+        padding=(1, 2),
+    ))
+
+
+# ---------------------------------------------------------------------------
+# diff — compare two checkpoints
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.argument("id_a")
+@click.argument("id_b")
+def diff(id_a, id_b):
+    """Compare two checkpoints — see how understanding evolved."""
+    store = _store()
+
+    cp_a = store.get_checkpoint(id_a) or store.get_checkpoint(
+        next((c.id for c in store.list_checkpoints(limit=50) if c.id.startswith(id_a)), "")
+    )
+    cp_b = store.get_checkpoint(id_b) or store.get_checkpoint(
+        next((c.id for c in store.list_checkpoints(limit=50) if c.id.startswith(id_b)), "")
+    )
+
+    if not cp_a:
+        console.print(f"[red]Checkpoint not found: {id_a}[/]")
+        sys.exit(1)
+    if not cp_b:
+        console.print(f"[red]Checkpoint not found: {id_b}[/]")
+        sys.exit(1)
+
+    # Ensure A is older
+    if cp_a.timestamp > cp_b.timestamp:
+        cp_a, cp_b = cp_b, cp_a
+
+    console.print(f"\n[dim]A:[/] {cp_a.id[:8]}  {cp_a.timestamp.strftime('%m-%d %H:%M')}  {cp_a.current_task[:50]}")
+    console.print(f"[dim]B:[/] {cp_b.id[:8]}  {cp_b.timestamp.strftime('%m-%d %H:%M')}  {cp_b.current_task[:50]}\n")
+
+    def _set_diff(label, old: list, new: list) -> None:
+        added = [x for x in new if x not in old]
+        removed = [x for x in old if x not in new]
+        if added or removed:
+            console.print(f"[bold]{label}[/]")
+            for x in added:
+                console.print(f"  [green]+ {x}[/]")
+            for x in removed:
+                console.print(f"  [red]- {x}[/]")
+            console.print()
+
+    if cp_a.current_task != cp_b.current_task:
+        console.print(f"[bold]Task[/]")
+        console.print(f"  [red]- {cp_a.current_task}[/]")
+        console.print(f"  [green]+ {cp_b.current_task}[/]\n")
+
+    if cp_a.status != cp_b.status:
+        console.print(f"[bold]Status[/]  {cp_a.status} → {cp_b.status}\n")
+
+    _set_diff("Findings", cp_a.findings, cp_b.findings)
+    _set_diff("Dead ends", cp_a.dead_ends, cp_b.dead_ends)
+    _set_diff("Next steps", cp_a.next_steps, cp_b.next_steps)
+    _set_diff("Open questions", cp_a.open_questions, cp_b.open_questions)
+    _set_diff("Files", cp_a.files_changed, cp_b.files_changed)
+
+    new_decisions = [d for d in cp_b.decisions if d.what not in {x.what for x in cp_a.decisions}]
+    if new_decisions:
+        console.print("[bold]New decisions[/]")
+        for d in new_decisions:
+            console.print(f"  [green]+ {d.what}[/] — {d.why}")
+        console.print()
+
+
+# ---------------------------------------------------------------------------
+# export — full project timeline as markdown
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--project", "-p", default=None)
+@click.option("--output", "-o", type=click.Path(), default=None, help="Write to file (default: stdout)")
+@click.option("--limit", "-l", default=50, show_default=True)
+def export(project, output, limit):
+    """Export full project checkpoint history as a markdown document."""
+    store = _store()
+    proj = project or _current_project()
+    checkpoints = store.list_checkpoints(project=proj, limit=limit)
+
+    if not checkpoints:
+        console.print(f"[yellow]No checkpoints for '{proj}'[/]")
+        return
+
+    # Oldest first for timeline
+    checkpoints = list(reversed(checkpoints))
+
+    lines = [f"# {proj} — Work Timeline", ""]
+    lines.append(f"*{len(checkpoints)} checkpoint(s) exported*\n")
+
+    for i, cp in enumerate(checkpoints, 1):
+        lines.append(f"---\n")
+        lines.append(f"## {i}. {cp.current_task}")
+        lines.append(f"*{cp.timestamp.strftime('%Y-%m-%d %H:%M')} UTC · {cp.status}*")
+        if cp.agent:
+            lines.append(f"*agent: {cp.agent}*")
+        lines.append("")
+
+        if cp.goal:
+            lines.append(f"**Goal:** {cp.goal}\n")
+
+        if cp.findings:
+            lines.append("**Findings:**")
+            for f in cp.findings:
+                lines.append(f"- {f}")
+            lines.append("")
+
+        if cp.decisions:
+            lines.append("**Decisions:**")
+            for d in cp.decisions:
+                alts = f" *(rejected: {', '.join(d.alternatives_rejected)})*" if d.alternatives_rejected else ""
+                lines.append(f"- **{d.what}** — {d.why}{alts}")
+            lines.append("")
+
+        if cp.dead_ends:
+            lines.append("**Dead ends:**")
+            for de in cp.dead_ends:
+                lines.append(f"- {de}")
+            lines.append("")
+
+        if cp.next_steps:
+            lines.append("**Next steps:**")
+            for s in cp.next_steps:
+                lines.append(f"- {s}")
+            lines.append("")
+
+    text = "\n".join(lines)
+
+    if output:
+        Path(output).write_text(text, encoding="utf-8")
+        console.print(f"[green]Timeline written to {output}[/]")
+    else:
+        console.print(Markdown(text))

@@ -23,3 +23,7 @@ threadline = "threadline.cli:cli"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["threadline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

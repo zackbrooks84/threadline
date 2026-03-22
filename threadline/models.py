@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -20,7 +20,7 @@ class Checkpoint(BaseModel):
     """A point-in-time snapshot of work state."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     project: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # What am I doing?
     current_task: str
@@ -45,7 +45,7 @@ class Checkpoint(BaseModel):
     agent: str | None = None  # "claude-sonnet-4-6", "gpt-4o", etc.
     tags: list[str] = Field(default_factory=list)
 
-    model_config = {"json_encoders": {datetime: lambda v: v.isoformat()}}
+    model_config = {}
 
 
 class Handoff(BaseModel):
@@ -61,4 +61,4 @@ class Handoff(BaseModel):
     immediate_action: str     # the single first thing to do
     watch_out_for: list[str]  # known pitfalls / dead ends not to repeat
 
-    model_config = {"json_encoders": {datetime: lambda v: v.isoformat()}}
+    model_config = {}
