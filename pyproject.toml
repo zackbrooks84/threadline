@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "threadline"
+version = "0.1.0"
+description = "Work continuity engine for AI agents — checkpoint, handoff, resume."
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "pydantic>=2.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+mcp = ["fastmcp>=0.1.0"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+threadline = "threadline.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["threadline*"]
